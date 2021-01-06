@@ -1,0 +1,427 @@
+---
+title: "Movies' Rating Modeling and Prediction"
+output:
+  html_document:
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+  pdf_document: default
+---
+
+## Setup
+<p>&nbsp;</p>
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+library(statsr)
+library(graphics)
+```
+
+### Load data
+
+```{r load-data}
+load("movies.Rdata")
+```
+
+
+
+* * *
+
+## Part 1: Data
+
+As indicated in the project files, this data set is comprised of 651 randomly sampled movies produced and released before 2016. It is thus an observational study with random sampling. The results of this study can probably be generalized but no causality can be established as there was no random assignment used.
+
+One reservation that one may do relates to the fact that films produced and released since 2016 are not included in the sample and this may affect the conclusions about the population.
+
+
+* * *
+
+<p>&nbsp;</p>
+## Part 2: Research question
+The research question is set in the project files and relates to the attributes that make a movie popular. In other words, we are expected to establish an association between the attributes of a movie and its score.
+
+Even though no causality can be established, it is still important for the movie-making industry to know what factors are associated with its popularity.
+
+
+* * *
+
+<p>&nbsp;</p>
+## Part 3: Exploratory data analysis
+<p>&nbsp;</p>
+### Step 1. Variables selection and data clean up.
+
+Creating a data set with relevant variables: `title_type`, `genre`, `runtime`, `mpaa_rating`, `thtr_rel_month`, `thtr_rel_day`, `dvd_rel_month`, `dvd_rel_day`, `critics_score`, `imdb_num_votes`, `best_actor_win`, `best_actress_win`, `best_dir_win` (explanatory variables) and `imdb_rating`, `audience_score` (response variables)
+
+```{r }
+
+movies2 <- movies %>%
+  
+    # selecting variables
+    select(title_type, genre, runtime, mpaa_rating, thtr_rel_month, thtr_rel_day, 
+           dvd_rel_month, dvd_rel_day, critics_score, imdb_num_votes,
+           best_actor_win, best_actress_win, best_dir_win, 
+           imdb_rating, audience_score) %>%
+  
+    # excluding "Unrated" movies from `mpaa_rating`
+  	filter(mpaa_rating != "Unrated")
+
+```
+
+Converting release date variables from numerical to categorical
+```{r }
+
+# converting `thtr_rel_month`, `thtr_rel_day`, `dvd_rel_month`, `dvd_rel_day` to categorical
+    movies2$thtr_rel_month <- as.factor(movies2$thtr_rel_month)
+    movies2$thtr_rel_day <- as.factor(movies2$thtr_rel_day)
+    movies2$dvd_rel_month <- as.factor(movies2$dvd_rel_month)
+    movies2$dvd_rel_day <- as.factor(movies2$dvd_rel_day)
+    
+```
+
+Using relevant variables `imdb_rating` and `audience_score` to create the response variable for the model (calculated as the average of two original scores).
+
+```{r }
+
+# mutating a new variable
+movies2 <- movies2 %>%
+    mutate(pop = (imdb_rating + audience_score)/2)
+
+
+```
+
+Excluded variables:
+
+Variable         | Comments
+---------------- | -----------
+`studio`         | levels are almost as numerous as observations
+`thtr_rel_year`  | cannot be used for prediction as it is a past event that will never repeat
+`dvd_rel_year`   | same
+`critics_rating` | already reflected in `critics_score`
+`audience_rating`| already reflected in `audience_score`
+`best_pic_nom`   | cannot be used since we are measuring popularity among the audience
+`best_pic_win`   | same
+`top200_box`     | cannot be used since can be affected by advertisement expenses and other confounding variables
+`director`       | choice of the director is reflected in `best_dir_win` variable
+`actor1`         | casting is reflected in `best_actor_win`, `best_actress_win` variables
+`actor2`         | same
+`actor3`         | same
+`actor4`         | same
+`actor5`         | same
+`imdb_url`       | variable provided for information purposes only
+`rt_url`         | same
+
+A special remark should be made on `imdb_num_votes` since the number of votes a movie receives can be treated as both explanatory and response variable. In this research we treat it as an explanatory variable.
+
+<p>&nbsp;</p>
+### Step 2. Looking for collinearity between the explanatory variables.
+
+We will account for collinearity when we build the MLR model using the Adjusted R-squared selection method as if a variable adds no new information to the model (is collinear) it will be dropped during the model selection stage.
+<p>&nbsp;</p>
+
+### Step 3. EDA and simple regression for some of the variables.
+
+**Case 1**. Considering the relationship between `title_type` (categorical) and the response variable `pop` (numerical).
+
+```{r }
+
+# creating a plot
+movies2 %>%
+    ggplot(aes(x = title_type, y = pop)) +
+        geom_boxplot()
+
+```
+
+Mean of the `pop` variable for Feature films looks different from the mean score of Documentaries and TV movies.
+
+<p>&nbsp;</p>
+Summary statistics
+
+```{r }
+
+# mean popularity broken down by movie type
+movies2 %>%
+    group_by(title_type) %>%
+    summarise(mean_dd = mean(pop)) %>%
+    arrange(desc(mean_dd))
+
+
+```
+
+Summary statistics provide the same result as the plot.
+
+<p>&nbsp;</p>
+Simple linear regression for categorical data
+
+```{r }
+
+# regression model for `title_type` and `pop`
+slr1 <- lm(pop ~ title_type, data = movies2)
+summary(slr1)
+    
+
+```
+
+From the box plot, summary statistics and the simple regression model for categorical data we can conclude that while R-squared is small and there is no significant difference between a TV movie and a Documentary there is a significant difference between the reference level (Documentary) and a Feature film, the model itself has a very small p-value and appears to be statistically significant.
+
+<p>&nbsp;</p>
+**Case 2**. Consider the relationship between `critics_score` (numerical) and the explanatory variable `pop` (numerical).
+
+```{r }
+
+# creating a plot and a trenline
+movies2 %>%
+    ggplot(aes(x = critics_score, y = pop)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = FALSE)
+
+```
+
+The plot shows a positive linear relationship.
+
+<p>&nbsp;</p>
+Using a simple regression model
+
+```{r }
+
+# regression model for `critics_score` and `pop`
+slr2 <- lm(pop ~ critics_score, data = movies2)
+summary(slr2)
+    
+
+```
+
+Correlation coefficient
+```{r }
+# correlation between `critics_score` and `pop`
+cor(movies2$critics_score,movies2$pop)
+
+```
+
+From the scatter plot, the trend line, the simple regression model and the correlation coefficient output we can conclude that there is a significant association between popularity and critics score. At the same time, R-squared is modest showing that only half of the response variable variation can be explained by the `critics_score` variable.
+
+<p>&nbsp;</p>
+**Conclusion**
+
+EDA on pairs of variables (one explanatory variable and the response variable) showed that there is a significant correlation between at least one pair of variables. At the same time, the coefficients of determination show that a significant amount of variation is not explained by the above factors. We will try to improve R-squared and proceed to an MLR model.
+
+
+* * *
+
+<p>&nbsp;</p>
+## Part 4: Modeling
+
+**Variables selection.** Variables selection for the full model and reasoning for excluding some of the variables *are given in Part 3*.
+
+**Model selection method**. In this research we are going to use a *forward selection with adjusted R-squared* approach as it provides more reliable predictions than the p-value and does not depend on the choice of the significance level cutoff.
+<p>&nbsp;</p>
+
+**Forward selection with adjusted R-squared**
+<p>&nbsp;</p>
+
+Step     | Variables included                                                    | Adjusted R-squared
+-------- | --------------------------------------------------------------------- | -------------
+Step 1   | pop ~ title_type                                                      | 0.04074
+&nbsp;   | pop ~ genre                                                           | 0.133
+&nbsp;   | pop ~ runtime                                                         | 0.05369
+&nbsp;   | pop ~ mpaa_rating                                                     | 0.01012
+&nbsp;   | pop ~ thtr_rel_month                                                  | -0.006472
+&nbsp;   | pop ~ thtr_rel_day                                                    | -0.003599
+&nbsp;   | pop ~ dvd_rel_month                                                   | 0.0009197
+&nbsp;   | pop ~ dvd_rel_day                                                     | 0.003385
+&nbsp;   | pop ~ critics_score                                                   | **0.4882**
+&nbsp;   | pop ~ imdb_num_votes                                                  | 0.1177
+&nbsp;   | pop ~ best_actor_win                                                  | 0.0001963
+&nbsp;   | pop ~ best_actress_win                                                | 0.0008094
+&nbsp;   | pop ~ best_dir_win                                                    | 0.01292
+Step 2   | pop ~ critics_score + title_type                                      | 0.4893
+&nbsp;   | pop ~ critics_score + genre                                           | 0.5068
+&nbsp;   | pop ~ critics_score + runtime                                         | 0.496
+&nbsp;   | pop ~ critics_score + mpaa_rating                                     | 0.4862
+&nbsp;   | pop ~ critics_score + thtr_rel_month                                  | 0.4831
+&nbsp;   | pop ~ critics_score + thtr_rel_day                                    | 0.4787
+&nbsp;   | pop ~ critics_score + dvd_rel_month                                   | 0.4894
+&nbsp;   | pop ~ critics_score + dvd_rel_day                                     | 0.4762
+&nbsp;   | pop ~ critics_score + imdb_num_votes                                  | **0.5158**
+&nbsp;   | pop ~ critics_score + best_actor_win                                  | 0.4874
+&nbsp;   | pop ~ critics_score + best_actress_win                                | 0.4874
+&nbsp;   | pop ~ critics_score + best_dir_win                                    | 0.4874
+Step 3   | pop ~ critics_score + imdb_num_votes + title_type                     | 0.5209
+&nbsp;   | pop ~ critics_score + imdb_num_votes + genre                          | **0.5434**
+&nbsp;   | pop ~ critics_score + imdb_num_votes + runtime                        | 0.5163
+&nbsp;   | pop ~ critics_score + imdb_num_votes + mpaa_rating                    | 0.5149
+&nbsp;   | pop ~ critics_score + imdb_num_votes + thtr_rel_month                 | 0.5111
+&nbsp;   | pop ~ critics_score + imdb_num_votes + thtr_rel_day                   | 0.5078
+&nbsp;   | pop ~ critics_score + imdb_num_votes + dvd_rel_month                  | 0.5153
+&nbsp;   | pop ~ critics_score + imdb_num_votes + dvd_rel_day                    | 0.5052
+&nbsp;   | pop ~ critics_score + imdb_num_votes + best_actor_win                 | 0.5153
+&nbsp;   | pop ~ critics_score + imdb_num_votes + best_actress_win               | 0.5156
+&nbsp;   | pop ~ critics_score + imdb_num_votes + best_dir_win                   | 0.5154
+Step 4   | pop ~ critics_score + imdb_num_votes + genre + title_type             | 0.5421
+&nbsp;   | pop ~ critics_score + imdb_num_votes + genre + runtime                | 0.5433
+&nbsp;   | pop ~ critics_score + imdb_num_votes + genre + mpaa_rating            | 0.5431
+&nbsp;   | pop ~ critics_score + imdb_num_votes + genre + thtr_rel_month         | 0.5383
+&nbsp;   | pop ~ critics_score + imdb_num_votes + genre + thtr_rel_day           | 0.536
+&nbsp;   | pop ~ critics_score + imdb_num_votes + genre + dvd_rel_month          | 0.54
+&nbsp;   | pop ~ critics_score + imdb_num_votes + genre + dvd_rel_day            | 0.5315
+&nbsp;   | pop ~ critics_score + imdb_num_votes + genre + best_actor_win         | 0.5428
+&nbsp;   | pop ~ critics_score + imdb_num_votes + genre + best_actress_win       | 0.5433
+&nbsp;   | pop ~ critics_score + imdb_num_votes + genre + best_dir_win           | 0.5428
+
+
+<p>&nbsp;</p>
+Final MLR model output
+```{r }
+# final MLR model
+m_final <- lm(pop ~ critics_score + imdb_num_votes + genre, data = movies2)
+summary(m_final)
+
+```
+
+<p>&nbsp;</p>
+**Model diagnostics**
+
+1. Linear relationship between the numerical x and y.
+
+We have two numerical variables: `critics_score` and `imdb_num_votes`
+
+```{r }
+
+# creating a plot and a trenline
+movies2 %>%
+    ggplot(aes(x = critics_score, y = pop)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = FALSE)
+
+```
+
+The data appear to have a linear relationship.
+
+```{r }
+
+# creating a plot and a trenline
+movies2 %>%
+    ggplot(aes(x = imdb_num_votes, y = pop)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = FALSE)
+    
+
+
+```
+
+The data appear to be heavily concentrated between 0 and 125 000 votes.
+
+2. Nearly normal residuals.
+
+```{r }
+# histogram of residuals
+ggplot(data = m_final, aes(x = .resid)) +
+  geom_histogram(binwidth = 0.7) +
+  xlab("Residuals")
+
+# normal probability plot of residuals
+ggplot(data = m_final, aes(sample = .resid)) +
+  stat_qq()
+
+```
+
+The residuals appear to be normally distributed and centered at 0.
+
+3. Constant variability
+
+```{r }
+ggplot(data = m_final, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  xlab("Fitted values") +
+  ylab("Residuals")
+
+
+```
+
+The variability around the 0 line seems to be roughly constant.
+
+4. Independence of residuals
+
+```{r }
+plot(m_final$residuals)
+
+```
+
+There appears to be no time structure in `critics_score` data collection process.
+
+In general, the conditions for the MLR model are satisfied.
+
+<p>&nbsp;</p>
+**Interpretation of model coefficients**
+
+The two numerical explanatory variables, `imdb_num_votes` and `critics_score`, have a positive linear relationship with the response variable. Higher value of each of these variables, all other independent variables held constant, increases the popularity of a movie.
+
+In case of the third explanatory variable, `genre`, the reference level is *Action & Adventure*. It means that all other independent variables held constant, *Action & Adventure* adds nothing to the response variable while other categories may increase or decrease the popularity score.
+
+<p>&nbsp;</p>
+**Conclusion**
+
+In terms of methodology, the model seems to meet all the criteria for Adjusted R-squared forward selection and model diagnostics.
+
+According to the model, movie popularity depends first of all on `critics_score`, `imdb_num_votes` and `genre` variables.
+
+At the same time a modest Adjusted R-squared of 0.5434 means that slightly more than 45% of the popularity is explained by other factors.
+
+* * *
+
+<p>&nbsp;</p>
+## Part 5: Prediction
+
+Movie chosen: *The Do-Over* (2016)
+
+Prediction
+```{r }
+newdata = data.frame(critics_score = 10, imdb_num_votes = 36697, genre="Comedy")
+predict(m_final, newdata, interval="predict", level = 0.95)
+
+```
+
+Actual popularity
+
+```{r}
+# Rating on IMDB
+imdb_r <- 5.7
+
+# Audience score on Rotten Tomatoes
+rt_r <- 40
+
+# Actual popularity score
+pop_actual <- (imdb_r + rt_r)/2
+pop_actual
+
+```
+
+<p>&nbsp;</p>
+**Conclusion**
+
+A Comedy with 10% critics score and 36,697 votes on IMDB is expected to have a popularity score between 8.08065 and 36.11802, being 22.09933 the expected value.
+
+With the actual popularity score of 22.85, 22.09933 is almost a perfect fit.
+
+<p>&nbsp;</p>
+Sources
+<ol> 
+<li> `critics_score`: https://www.rottentomatoes.com/m/the_do_over_2016 </li>
+<li> `imdb_num_votes`: https://www.imdb.com/title/tt4769836/ </li>
+</ol>
+
+* * *
+
+<p>&nbsp;</p>
+## Part 6: Conclusion
+
+Based on the prediction results we can conclude that the model is quite accurate at predicting films popularity. 
+
+However, if we wanted to conduct an experiment to establish a causal relationship, we wouldn't be able to do so as the numerical explanatory variables are out of our control. This can be considered as the most significant shortcoming of the developed model.
+
+Future research ideas may include text analysis on how specific directors and cast affect the movie popularity.
+<p>&nbsp;</p>
+<p>&nbsp;</p>
+<p>&nbsp;</p>
