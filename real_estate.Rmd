@@ -1,0 +1,657 @@
+---
+title: "Real estate selling price prediction"
+output:
+  pdf_document: default
+  html_document:
+    fig_height: 4
+    number_sections: no
+date: "28/04/2020"
+---
+
+# Background
+
+The task for this research project is to develop a model to predict the selling price of a given home in Ames, Iowa. Real estate investors may use this information to assess whether the asking price of a house is higher or lower than the true value of the house. If the home is undervalued, it may be a good investment for the firm.
+
+# Training Data and relevant packages
+
+In order to better assess the quality of the model, the data have been randomly divided into three separate pieces: a training data set, a testing data set, and a validation data set. For now we will load the training data set, the others will be loaded and used later.
+
+```{r load, message = FALSE}
+load("ames_train.Rdata")
+```
+
+Loading packages
+
+```{r packages, message = FALSE}
+library(statsr)
+library(dplyr)
+library(ggplot2)
+library(BAS)
+library(MASS)
+library(e1071)
+library(corrplot)
+library(forcats)
+
+```
+
+## Part 1 - Exploratory Data Analysis (EDA)
+
+In the EDA section, we will try to better understand the data structure as well as detect any patterns and relationships.
+
+* * *
+
+Before creating graphs we will need to filter by normal sales conditions as the test data only include these observations.
+
+```{r}
+# filtering by "Normal Sales Condition"
+ames_train <- ames_train %>%
+  filter(Sale.Condition == "Normal")
+
+```
+
+After examining the variables provided in the data set we have chosen the following plots.
+
+**Figure 1**. `Area` variable distribution
+
+```{r }
+
+# library(cowplot)
+# theme_set(theme_cowplot())
+
+# checking skewness
+skewness(log(ames_train$area))
+
+# checking collinearity
+cor(log(ames_train$price), log(ames_train$area))
+
+par(mfrow=c(1,2))
+
+# log-transformation
+hist(log(ames_train$area),
+     main="log(`area`) distribution",
+     xlab="log(`area`)",
+     ylab="Frequency",
+     col="#F8766D",
+     breaks = 30)
+
+# checking linear relationship
+ggplot(data = ames_train, aes(x = log(area), y = log(price))) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Area vs. Price Relationship", x = "Area", y = "Price")
+
+#plot_grid(x, y)
+
+```
+
+From the plots and summary statistics above we can see that after log-transforming the variable `area` we achieve a generally normal distribution and note quite a high correlation between the explanatory and the response variable.
+
+This variable will be included in the model.
+
+**Figure 2**. `Bldg.Type` variable
+
+```{r}
+# flipped side-by-side boxplot
+ggplot(ames_train, aes(x = Bldg.Type, y = price)) +
+  geom_boxplot() +
+  coord_flip() +
+  labs(title = "Price distribution by `Bldg.Type`", x = "Building Type", y = "Price")
+
+# number of properties in each category
+table(ames_train$Bldg.Type)
+
+```
+
+Unlike the price distribution by `Neighborhood`, grouping by `Bldg.Type` does not show that the medians are significantly different.  
+
+Secondly, there are many more Single Family homes which may lead to bias in the variable interpretation.
+
+This variable will not be included in the model.
+
+**Figure 3**. Correlation plot.
+
+```{r}
+# preparing the data
+cor_var <- ames_train %>%
+  dplyr::select(price, area, Lot.Area, Year.Built, Year.Remod.Add, BsmtFin.SF.1, Bsmt.Unf.SF, X1st.Flr.SF, X2nd.Flr.SF, Total.Bsmt.SF, TotRms.AbvGrd)
+
+# correlation plot between some numeric variables
+corrplot(cor(cor_var))
+
+```
+
+From the plot above we see there is a relatively high correlation between `price` response variable and `area`, `Year.Built`, `Year.Remod.Add`, `X1st.Flr.SF`, `Total.Bsmt.SF` explanatory variables.
+
+At the same time, some of the explanatory variables are collinear. Such is the case of `area` and `X2nd.Flr.SF` and `TotRms.AbvGrd`, `X1st.Flr.SF` and `Total.Bsmt.SF`. One of the two collinear variables adds nothing new to the model and should not be considered.
+
+
+* * *
+
+## Part 2 - Development and assessment of an initial model
+
+### Section 2.1 An Initial Model
+Creating a simple, intuitive initial model based on the results of the exploratory data analysis.
+
+* * *
+
+**Choice of the variables**. One of the criteria for choosing the variables is based on the idea of breaking down the explanatory variables into groups. This allows to 
+
+(a) create a linear model that explains a large amount of variability using different factors (the initial model includes area, neighborhood, quality, year of remodeling, exterior and lot factors) and 
+
+(b) avoid collinearity as, for example, `area` and `TotRms.AbvGrd` are both very good predictors of `price` being at the same time highly correlated.
+
+For the purpose of future model selection we will use two methods for creating the model.
+
+
+```{r fit_model}
+
+# fitting the Ordinary Least Square (OLS) initial model
+initial.model <- lm(log(price) ~ log(area) + Neighborhood + Overall.Qual + Year.Remod.Add + Exterior.1st + X1st.Flr.SF + Paved.Drive, ames_train, na.action = na.omit)
+
+summary(initial.model)
+
+BIC(initial.model)
+
+```
+
+**Model results**. From the summary table we see that many of the variables and the model itself are highly statistically significant with a very low p-value and the Adjusted R-squared, *i.e.* the explained variability, at the level of 88%.
+
+All the predictors except `Neighborhood` increase the price all other variables held constant. In the case of the `Neighborhood` categorical variable it depends on the specific neighborhood we are using as input.
+
+* * *
+
+### Section 2.2 Model Selection
+
+Choosing the "best" model using the initial model as a starting point.
+
+* * *
+
+As mentioned in Section 2.1, we will use two approaches. Under the first approach, will will use the BIC as the criterion for selecting the best model. Under the second approach, we will use the Bayesian model averaging (BMA) to create posteriors from the data we have in the data set.
+
+```{r model_select 1 }
+
+# BIC backwards elimination setting k = log(n)
+BIC.model <- stepAIC(initial.model, 
+                     scale = 0, 
+                     direction = c("backward"), 
+                     trace = 1, 
+                     keep = NULL, 
+                     steps = 1000, 
+                     use.start = FALSE,
+                     k = log(nrow(ames_train)))
+
+summary(BIC.model)
+BIC(BIC.model)
+
+```
+
+```{r model_select 2 }
+# implementing Bayesian model averaging (BMA) 
+model.bas <- bas.lm(log(price) ~ log(area) + Neighborhood + 
+                      Overall.Qual + Year.Remod.Add + Exterior.1st +
+                      X1st.Flr.SF + Paved.Drive,
+                    data = ames_train, 
+                    na.action = na.omit,
+                    prior = "BIC", 
+                    modelprior=uniform())
+
+model.bas
+summary(model.bas)
+
+```
+
+**Conclusion**. Using the BIC selection method, we see that we are left with a model with 6 predictors (`Exterior.1st` was dropped), the BIC improved and the Adjusted R-squared remained the same. 
+
+Most likely, it means that the dropped variable made no contribution to the model.
+
+Under the BAS method, we have several models we will use for prediction. Model 1 has the posterior probability of inclusion of 0.01 and uses the following variables: intercept, area, neighborhood, exterior covering on house, overall quality, remodel date, type of drive and first floor area.
+
+
+* * *
+
+### Section 2.3 Initial Model Residuals
+Model performance assessment.
+
+* * *
+
+For the purpose of examining the residuals, we will construct several plots. We will be using the `BIC.model`.
+
+```{r model_resid}
+
+# residuals vs. fitted
+plot(BIC.model, which = 1)
+
+# predicted vs. actual
+ames_train$prediction <- predict(BIC.model)
+ames_train$prediction = exp(ames_train$prediction)
+
+ggplot(ames_train, aes(x = prediction, y = price)) + 
+geom_point() +
+geom_abline(color = "red") +
+labs(title="Predicted vs. actual price", x="Predicted", y="Actual")
+
+# residuals distribution
+hist(BIC.model$residuals)
+plot(BIC.model, which = 2)
+
+# independence of residuals
+plot(BIC.model$residuals)
+
+```
+
+As we can see from the plots, the model appears to fit the data well, there is a clear trend which is however weaker at the higher level of prices.
+
+At the same time, there are several outliers that affect the normality of the residuals distribution. These are the observations 272 and 611.
+
+```{r}
+
+# looking at the outliers
+outliers.df <- ames_train %>%
+  dplyr::select(price, prediction, area, Neighborhood, Overall.Qual, Year.Remod.Add, X1st.Flr.SF, Paved.Drive)
+
+outliers.df[c(272,611), ]
+
+```
+
+Given the area, the overall quality, and the remodel date the actual price is very low. These outliers might affect the model predictive capacity.
+
+```{r}
+# deleting outliers
+ames_train <- ames_train[-c(272,611),]
+
+# new initial model
+initial.model.2 <- lm(log(price) ~ log(area) + Neighborhood + Overall.Qual + Year.Remod.Add + Exterior.1st + X1st.Flr.SF + Paved.Drive, ames_train, na.action = na.omit)
+
+# new BIC model
+BIC.model.2 <- stepAIC(initial.model.2, 
+                     scale = 0, 
+                     direction = c("backward"), 
+                     trace = 1, 
+                     keep = NULL, 
+                     steps = 1000, 
+                     use.start = FALSE,
+                     k = log(nrow(ames_train)))
+
+summary(BIC.model.2)
+BIC(BIC.model.2)
+
+# checking the residuals
+plot(BIC.model.2, which = 2)
+
+```
+
+Removing the two outliers we improved the Adjusted R-squared and the BIC. 
+
+At the same time, it would be wise to investigate further why these two properties have such a low price. These particular properties may be a good investment.
+
+* * *
+
+### Section 2.4 Initial Model RMSE
+
+Calculating the initial model RMSE.
+
+* * *
+
+The RMSE for the second BIC model is $24323.9. It measures the error of a model in predicting quantitative data. The smaller the error the better.
+
+```{r model_rmse}
+# extracting predictions
+predict.BIC <- exp(predict(BIC.model.2, ames_train))
+
+# extracting residuals
+resid.BIC <- ames_train$price - predict.BIC
+
+# calculating RMSE
+rmse.BIC <- sqrt(mean(resid.BIC^2))
+rmse.BIC
+
+```
+
+* * *
+
+### Section 2.5 Overfitting and out-of-sample data
+
+Comparing the performance of the model on both in-sample and out-of-sample data sets.
+
+```{r loadtest, message = FALSE}
+# loading out-of-sample data set
+load("ames_test.Rdata")
+```
+
+* * *
+
+First, we will have to remove one observation in the Landmark neighborhood as otherwise R makes it impossible to compare the two data sets.
+
+```{r}
+# removing `Landmrk` observation
+ames_test <- subset(ames_test, Neighborhood != "Landmrk")
+
+```
+
+Then, we will calculate the RMSE using the test data.
+
+```{r initmodel_test}
+# extracting predictions
+predict.BIC.test <- exp(predict(BIC.model.2, ames_test))
+
+# extracting residuals
+resid.BIC.test <- ames_test$price - predict.BIC.test
+
+# calculating RMSE
+rmse.BIC.test <- sqrt(mean(resid.BIC.test^2))
+rmse.BIC.test
+
+
+```
+
+It would also be useful to calculate the coverage probability.
+
+```{r}
+# predicting prices
+predict.BIC.test <- exp(predict(BIC.model.2, ames_test, interval = "prediction"))
+
+# calculating proportion of observations that fall within prediction intervals
+coverage.prob.BIC.test <- mean(ames_test$price > predict.BIC.test[,"lwr"] &
+                            ames_test$price < predict.BIC.test[,"upr"])
+coverage.prob.BIC.test
+
+# proportion of observations (rows) in `ames_test` have sales prices that fall outside the prediction intervals
+1-coverage.prob.BIC.test 
+
+```
+
+Although both the RMSE and the coverage probability are not perfect, they do not significantly diverge from the training data calculations and thus the model fits the test data reasonably well.
+
+
+* * *
+
+## Part 3 Development of a Final Model
+
+Creating a final model to predict housing prices in Ames, IA.
+
+### Section 3.1 Final Model
+
+In this section we will fit the final model using the same criteria of breaking down the variables by groups thus achieving representativeness and avoiding collinearity.
+
+
+```{r model_playground}
+
+# converting NAs to a category
+ames_train$Garage.Qual <- fct_explicit_na(ames_train$Garage.Qual, "No garage")
+
+# formula
+fmla <- log(price) ~ log(area) + log(Lot.Area) + Lot.Config + Neighborhood + House.Style + Overall.Qual + Year.Remod.Add + Functional + Heating.QC + Total.Bsmt.SF + Full.Bath + Bedroom.AbvGr + Fireplaces + Garage.Area + Garage.Qual + X1st.Flr.SF + Paved.Drive
+
+# fitting the final model
+final.model <- lm(fmla, ames_train, na.action = na.omit)
+
+summary(final.model)
+BIC(final.model)
+
+```
+
+* * *
+
+### Section 3.2 Transformation
+
+Before fitting the model several variables were transformed (see the code above).
+
+Log transformation was applied to numerical variables `area` and `Lot.Area` to achieve more normal distribution.
+
+At the same time the NAs in the `Garage.Qual` variable were converted to a category since they represent the absence of a garage in a property.
+
+* * *
+
+### Section 3.3 Variable Interaction
+
+After visually examining the interaction between several explanatory variables (mostly between a categorical and a continuous variable) we have come to the conclusion that there are no significant interaction effects to consider in this model.
+
+```{r model_inter}
+
+# check interaction between `Lot.Area` and `Garage.Qual`
+ggplot(data = ames_train, aes(x = log(Lot.Area), y = log(price), color=Garage.Qual, shape=Garage.Qual)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  ggtitle("Possible interaction between two explanatory variables")
+
+```
+
+As an example, the above figure shows that when breaking down by `Garage.Qual` variable there are no significant interaction effects between this variable and `Lot.Area` as the trends are clearly not parallel.
+
+* * *
+
+### Section 3.4 Variable Selection
+
+For the purpose of variable selection we will use the BIC backwards selection method that increases the model fit, at the same time, introducing penalty for adding new parameters.
+
+```{r model_select}
+# BIC final model
+final.model.BIC <- stepAIC(final.model, 
+                     scale = 0, 
+                     direction = c("backward"), 
+                     trace = 1, 
+                     keep = NULL, 
+                     steps = 1000, 
+                     use.start = FALSE,
+                     k = log(nrow(ames_train)))
+
+summary(final.model.BIC)
+BIC(final.model.BIC)
+
+```
+
+The BIC model selection left 10 variables `log(area)`, `log(Lot.Area)`, `Overall.Qual`, `Year.Remod.Add`, `Heating.QC`, `Total.Bsmt.SF`, `Bedroom.AbvGr`, `Fireplaces`, `Garage.Area`, `Paved.Drive`.
+
+The Adjusted R-squared now explains less variability while the BIC improved.
+
+* * *
+
+### Section 3.5 Model Testing
+
+Based on the out-of-sample data, we have not changed the model since although the RMSE increased, the coverage probability shows a relatively high performance of the model.
+
+Possible changes will be made when creating and examining the residuals plot.
+
+```{r model_testing}
+# dropping 2 observations from House.Style to test the model
+ames_test <- subset(ames_test, House.Style != "2.5Fin")
+
+# calculating RMSE using training data
+predict.final.BIC.train <- exp(predict(final.model.BIC, ames_train))
+resid.final.BIC.train <- ames_train$price - predict.final.BIC.train
+rmse.final.BIC.train <- sqrt(mean(resid.final.BIC.train^2))
+rmse.final.BIC.train
+
+# calculating RMSE using test data
+predict.final.BIC.test <- exp(predict(final.model.BIC, ames_test))
+resid.final.BIC.test <- ames_test$price - predict.final.BIC.test
+rmse.final.BIC.test <- sqrt(mean(resid.final.BIC.test^2))
+rmse.final.BIC.test
+
+# predicting prices
+predict.final.BIC.test <- exp(predict(final.model.BIC, ames_test, interval = "prediction"))
+
+# calculating proportion of observations that fall within prediction intervals
+coverage.prob.final.BIC.test <- mean(ames_test$price > predict.final.BIC.test[,"lwr"] &
+                            ames_test$price < predict.final.BIC.test[,"upr"])
+coverage.prob.final.BIC.test
+
+# proportion of observations (rows) in `ames_test` have sales prices that fall outside the prediction intervals
+1-coverage.prob.final.BIC.test 
+
+
+```
+
+* * *
+
+## Part 4 Final Model Assessment
+
+### Section 4.1 Final Model Residuals
+
+On average, residuals are normally distributed with several outliers that affect the fit of the model.
+
+As the next step, we will try to fit the data without the outliers.
+
+```{r final_model_resid}
+
+# residuals vs. fitted
+plot(final.model.BIC, which = 1)
+
+# predicted vs. actual
+ames_train$prediction <- predict(final.model.BIC)
+ames_train$prediction = exp(ames_train$prediction)
+
+ggplot(ames_train, aes(x = prediction, y = price)) + 
+geom_point() +
+geom_abline(color = "red") +
+labs(title="Predicted vs. actual price", x="Predicted", y="Actual")
+
+# residuals distribution
+hist(final.model.BIC$residuals)
+plot(final.model.BIC, which = 2)
+
+# independence of residuals
+plot(final.model.BIC$residuals)
+
+```
+
+Data transformation post residual analysis.
+
+```{r}
+# deleting outliers
+ames_train <- ames_train[-c(62,215,559),]
+
+# new initial model
+final.model.2 <- lm(fmla, ames_train, na.action = na.omit)
+
+# new BIC model
+final.model.BIC.2 <- stepAIC(final.model.2, 
+                     scale = 0, 
+                     direction = c("backward"), 
+                     trace = 1, 
+                     keep = NULL, 
+                     steps = 1000, 
+                     use.start = FALSE,
+                     k = log(nrow(ames_train)))
+
+summary(final.model.BIC.2)
+BIC(final.model.BIC.2)
+
+# checking the residuals
+plot(final.model.BIC.2, which = 2)
+
+# calculating RMSE using test data with `final.model.BIC.2`
+predict.final.BIC.2.test <- exp(predict(final.model.BIC.2, ames_test))
+resid.final.BIC.2.test <- ames_test$price - predict.final.BIC.2.test
+rmse.final.BIC.2.test <- sqrt(mean(resid.final.BIC.2.test^2))
+rmse.final.BIC.2.test
+
+```
+
+As we can see, these transformations did not improve the BIC and left the Adjusted R-Squared almost the same. RMSE remained almost the same. We will continue with the `final.model.BIC`.
+
+* * *
+
+### Section 4.2 Final Model RMSE
+
+The RMSE, that is the standard deviation of the residuals, is 23542.26 which is slightly worse than the RMSE calculated using the training data.
+
+```{r}
+
+# calculating RMSE using test data
+predict.final.BIC.test <- exp(predict(final.model.BIC, ames_test))
+resid.final.BIC.test <- ames_test$price - predict.final.BIC.test
+rmse.final.BIC.test <- sqrt(mean(resid.final.BIC.test^2))
+rmse.final.BIC.test
+
+```
+
+* * *
+
+### Section 4.3 Final Model Evaluation
+
+The strength of the model is that it is able to explain over 90% of the variability in the data and performs well with the test data. In addition, only 6 per cent of sales prices in the test data set fall outside the prediction intervals (94 per cent coverage probability).
+
+Weaknesses include possible overfitting (we will examine that during model validation). In addition, not all the important predictors are included in the model.
+
+* * *
+
+### Section 4.4 Final Model Validation
+
+Testing the final model on a separate, validation data set. 
+
+```{r loadvalidation, message = FALSE}
+
+# loading the validation data set
+load("ames_validation.Rdata")
+
+```
+
+* * *
+
+Validation results are as follows.
+
+* The RMSE of the final model when applied to the validation data is 22012.34.
+
+* Validation data RMSE is above the training data RMSE (21976.79) and below the test data RMSE (23542.26).
+
+* 95% of the 95% predictive confidence intervals contain the true price of the house in the validation data set.
+
+* Given better validation results (compared to test results) in terms of RMSE and coverage probability, we can conclude that the final model reflects the uncertainty properly.
+
+```{r model_validate}
+# calculating RMSE using validation data
+predict.final.BIC.val <- exp(predict(final.model.BIC, ames_validation))
+resid.final.BIC.val <- ames_validation$price - predict.final.BIC.val
+rmse.final.BIC.val <- sqrt(mean(resid.final.BIC.val^2))
+rmse.final.BIC.val
+
+# predicting prices
+predict.final.BIC.val <- exp(predict(final.model.BIC, ames_validation, interval = "prediction"))
+
+# calculating proportion of observations that fall within prediction intervals
+coverage.prob.final.BIC.val <- mean(ames_validation$price > predict.final.BIC.val[,"lwr"] &
+                            ames_validation$price < predict.final.BIC.val[,"upr"])
+coverage.prob.final.BIC.val
+
+# proportion of observations (rows) in `ames_test` have sales prices that fall outside the prediction intervals
+1-coverage.prob.final.BIC.val 
+
+
+```
+
+* * *
+
+### Section 4.5 Final Model Result
+
+To see which properties in the validation data set are undervalued and overvalued we will need to once again examine the residuals this time with the validation data.
+
+```{r}
+# residuals vs. fitted
+plot(final.model.BIC, which = 1)
+
+# predicted prices
+ames_validation$prediction <- exp(predict(final.model.BIC, ames_validation))
+
+# looking at the outliers
+valuation.df <- ames_validation %>%
+  dplyr::select(price, prediction, area, Lot.Area, Overall.Qual, Year.Remod.Add, Heating.QC,  Total.Bsmt.SF, Bedroom.AbvGr, Fireplaces, Garage.Area, Paved.Drive)
+
+outliers.df[c(62,215,559), ]
+
+```
+
+Observations 62 and 215 are significantly undervalued and may be a good investment. At the same time, observation 559 is overvalued.
+
+
+* * *
+
+## Part 5 Conclusion
+
+Despite several complications which introduce additional uncertainty brought in by the outliers and possibly insufficient number of predictors, the model performs well on training, test and validation data.
+
+Additional research is required on properties that are undervalued and may represent a good investment.
+
+Moreover, although the data allows to create a representative model that is relatively easy to fit observing all the criteria, there is still uncertainty around the predictions which requires us to cautiously apply the modeling results.
+
+* * *
